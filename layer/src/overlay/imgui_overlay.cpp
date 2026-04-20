@@ -522,7 +522,7 @@ namespace vkBasalt
                                | ImGuiWindowFlags_NoCollapse
                                | ImGuiWindowFlags_NoDocking
                                | ImGuiWindowFlags_NoBringToFrontOnFocus;
-        if (ImGui::Begin("Nvidia Filters", nullptr, flags))
+        if (ImGui::Begin("Game Filters", nullptr, flags))
         {
             renderMainView(keyboard);
         }
@@ -544,7 +544,7 @@ namespace vkBasalt
         static bool firstFrame = true;
         if (firstFrame)
         {
-            ImGui::SetWindowFocus("Nvidia Filters");
+            ImGui::SetWindowFocus("Game Filters");
             firstFrame = false;
         }
 

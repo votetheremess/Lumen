@@ -55,7 +55,7 @@ async fn run(ipc: Client) -> ashpd::Result<()> {
 
     if !already_bound {
         log::info!("portal: binding new shortcut toggle-overlay (Ctrl+Alt+F)");
-        let shortcut = NewShortcut::new("toggle-overlay", "Toggle Nvidia Filters overlay")
+        let shortcut = NewShortcut::new("toggle-overlay", "Toggle Game Filters overlay")
             .preferred_trigger(Some("CTRL+ALT+f"));
         let parent = WindowIdentifier::default();
         portal.bind_shortcuts(&session, &[shortcut], &parent).await?.response()?;

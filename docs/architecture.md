@@ -45,7 +45,7 @@ Window close semantics:
 
 - **Tray → Quit** — clean exit; `SocketGuard::drop` unlinks the filesystem socket.
 - **Ctrl+C in `scripts/run.sh` terminal** — EXIT trap kills the frontend and removes the socket.
-- **Window X button** — hides to tray, does not quit (matches the Nvidia-Filters daemon model).
+- **Window X button** — hides to tray, does not quit (matches the Nvidia Freestyle daemon-in-background model).
 
 ## IPC
 

@@ -38,7 +38,7 @@ pub fn build(app: &adw::Application, ipc: Client) -> adw::ApplicationWindow {
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Nvidia Filters")
+        .title("Game Filters")
         .default_width(440)
         .default_height(680)
         .build();

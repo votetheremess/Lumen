@@ -112,7 +112,7 @@ namespace vkBasalt
 
         // Single slider row — label column, slider filling middle, reset
         // button at the right. Reset sets the value back to the effect's
-        // registered default (0 for every Nff param — matches Nvidia's
+        // registered default (0 for every gff param — matches Nvidia's
         // neutral baseline).
         void sliderRow(EffectRegistry* reg,
                        ImGuiOverlay*   overlay,

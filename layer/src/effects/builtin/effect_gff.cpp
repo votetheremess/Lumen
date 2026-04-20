@@ -13,7 +13,7 @@ namespace vkBasalt
     namespace
     {
         // Order must match the `constant_id = N` declarations in gff.frag.glsl.
-        struct NffParams
+        struct GffParams
         {
             // Brightness / Contrast
             float exposure;       // [-100, 100]
@@ -36,9 +36,9 @@ namespace vkBasalt
             float bwIntensity;    // [   0, 100]
         };
 
-        NffParams readParams(Config* pConfig)
+        GffParams readParams(Config* pConfig)
         {
-            return NffParams{
+            return GffParams{
                 pConfig->getOption<float>("gff.exposure",      0.0f),
                 pConfig->getOption<float>("gff.contrast",      0.0f),
                 pConfig->getOption<float>("gff.highlights",    0.0f),
@@ -65,13 +65,13 @@ namespace vkBasalt
                          std::vector<VkImage> outputImages,
                          Config*              pConfig)
     {
-        static NffParams params;
+        static GffParams params;
         params = readParams(pConfig);
 
         vertexCode   = full_screen_triangle_vert;
         fragmentCode = gff_frag;
 
-        constexpr size_t kParamCount = sizeof(NffParams) / sizeof(float);
+        constexpr size_t kParamCount = sizeof(GffParams) / sizeof(float);
         static std::array<VkSpecializationMapEntry, kParamCount> entries = []() {
             std::array<VkSpecializationMapEntry, kParamCount> e{};
             for (uint32_t i = 0; i < e.size(); ++i)
@@ -86,7 +86,7 @@ namespace vkBasalt
         static VkSpecializationInfo specInfo{};
         specInfo.mapEntryCount = static_cast<uint32_t>(entries.size());
         specInfo.pMapEntries   = entries.data();
-        specInfo.dataSize      = sizeof(NffParams);
+        specInfo.dataSize      = sizeof(GffParams);
         specInfo.pData         = &params;
 
         pVertexSpecInfo   = nullptr;

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Nvidia Filters
+Name=Game Filters
 GenericName=In-Game Filter Overlay
 Comment=Press a hotkey in any Vulkan game to adjust color, contrast, and sharpening live
 Exec=game-filters-flatpak
