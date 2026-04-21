@@ -29,8 +29,20 @@ namespace vkBasalt
 #include "lut.frag.h"
     };
 
-    const std::vector<uint32_t> gff_frag = {
-#include "gff.frag.h"
+    const std::vector<uint32_t> gff_local_frag = {
+#include "gff_local.frag.h"
+    };
+
+    const std::vector<uint32_t> gff_tonal_frag = {
+#include "gff_tonal.frag.h"
+    };
+
+    const std::vector<uint32_t> gff_color_frag = {
+#include "gff_color.frag.h"
+    };
+
+    const std::vector<uint32_t> gff_stylistic_frag = {
+#include "gff_stylistic.frag.h"
     };
 
     const std::vector<uint32_t> smaa_blend_frag = {

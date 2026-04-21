@@ -21,14 +21,16 @@ They communicate over `$XDG_RUNTIME_DIR/game-filters-flatpak.sock` using length-
 
 ## V1 Filter Scope
 
-Combined single-pass shader at `layer/src/shader/gff.frag.glsl` with eight parameters:
+Four chained fragment-shader passes, each with its own sliders. The overlay starts empty — press **Add** on a card to activate it, **Up** / **Down** to reorder, **Remove** to drop it. Shaders live at `layer/src/shader/gff_{local,tonal,color,stylistic}.frag.glsl`.
 
-- Brightness, Contrast (with Highlights, Shadows split)
-- Temperature, Vibrance (perceptual, not naive HSL)
-- Gamma
-- HDR Toning (classical tonemap approximation)
+| Card | Sliders |
+|---|---|
+| **Brightness / Contrast** | Exposure, Contrast, Highlights, Shadows, Gamma |
+| **Color** | Tint Color (hue), Tint Intensity, Temperature, Vibrance |
+| **Details** | Sharpen, Clarity, HDR Toning, Bloom |
+| **Effects** | Vignette, Black & White |
 
-Plus the existing CAS pass for Sharpen. Later versions will add Tilt-Shift, Painterly, DoF, Splitscreen, Bloom, Black & White, Vignette, Depth of Field, and RTX HDR / RTX Dynamic Vibrance approximations.
+Slider ranges follow Nvidia's public scale (bipolar ±100, unipolar 0–100, hue 0–360) so Windows preset values paste in directly. Upstream's CAS pass is also available — chain it ahead of the GFF cards for higher-quality adaptive sharpening. Tilt-Shift, Painterly, Depth of Field, and RTX HDR / RTX Dynamic Vibrance approximations are deferred post-v1.
 
 ## Supported Environments (v1)
 

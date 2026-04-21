@@ -7,6 +7,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -34,38 +35,55 @@ namespace gff
         ProfileState g_state;
         bool         g_initialized = false;
 
-        // The parameter keys the overlay exposes. Keeping this list local
-        // (rather than scraping the registry) gives us stable ordering and
-        // a fixed persisted schema — adding new params is a one-line change
-        // here alongside shader/effect updates.
-        const std::vector<std::string> kProfileKeys = {
-            "gff.exposure",
-            "gff.contrast",
-            "gff.highlights",
-            "gff.shadows",
-            "gff.gamma",
-            "gff.tintColor",
-            "gff.tintIntensity",
-            "gff.temperature",
-            "gff.vibrance",
-            "gff.sharpen",
-            "gff.clarity",
-            "gff.hdrToning",
-            "gff.bloom",
-            "gff.vignette",
-            "gff.bwIntensity",
-        };
-
-        constexpr const char* kEffectName = "gff_pipeline";
-
-        std::string readFile(const fs::path& path)
+        // The four cards a profile persists slider values for. Order here
+        // is the default / migration order — `cards()` returns this list
+        // to the overlay and the writer. Card membership is compile-time
+        // stable: adding a new knob is a one-line append plus the matching
+        // shader + effect update.
+        const std::vector<CardDef>& cardList()
         {
-            std::ifstream in(path);
-            if (!in.good())
-                return {};
-            std::stringstream ss;
-            ss << in.rdbuf();
-            return ss.str();
+            static const std::vector<CardDef> list = {
+                {
+                    "gff_tonal",
+                    "Brightness / Contrast",
+                    {
+                        {"gff.exposure",   "Exposure",   "%.0f"},
+                        {"gff.contrast",   "Contrast",   "%.0f"},
+                        {"gff.highlights", "Highlights", "%.0f"},
+                        {"gff.shadows",    "Shadows",    "%.0f"},
+                        {"gff.gamma",      "Gamma",      "%.0f"},
+                    },
+                },
+                {
+                    "gff_color",
+                    "Color",
+                    {
+                        {"gff.tintColor",     "Tint Color",     "%.0f\xc2\xb0"},
+                        {"gff.tintIntensity", "Tint Intensity", "%.0f"},
+                        {"gff.temperature",   "Temperature",    "%.0f"},
+                        {"gff.vibrance",      "Vibrance",       "%.0f"},
+                    },
+                },
+                {
+                    "gff_local",
+                    "Details",
+                    {
+                        {"gff.sharpen",   "Sharpen",    "%.0f"},
+                        {"gff.clarity",   "Clarity",    "%.0f"},
+                        {"gff.hdrToning", "HDR Toning", "%.0f"},
+                        {"gff.bloom",     "Bloom",      "%.0f"},
+                    },
+                },
+                {
+                    "gff_stylistic",
+                    "Effects",
+                    {
+                        {"gff.vignette",    "Vignette",      "%.0f"},
+                        {"gff.bwIntensity", "Black & White", "%.0f"},
+                    },
+                },
+            };
+            return list;
         }
 
         // Reject names that would escape gameDir() or alias it. argv[0]
@@ -174,8 +192,50 @@ namespace gff
             return out;
         }
 
-        // Write the current registry values for every known GFF param to a
-        // .conf file. Ensures the parent directory exists first.
+        // Parse a colon-separated `effects = a:b:c` value into a vector.
+        // Whitespace around each entry is trimmed; empty entries are
+        // skipped. Legacy single-name `gff_pipeline` is migrated to the
+        // four-effect default chain so users with pre-split profiles keep
+        // their slider values applied on upgrade.
+        std::vector<std::string> parseChain(const std::string& raw, bool& outMigrated)
+        {
+            outMigrated = false;
+            if (raw == "gff_pipeline")
+            {
+                outMigrated = true;
+                return {"gff_local", "gff_tonal", "gff_color", "gff_stylistic"};
+            }
+            std::vector<std::string> result;
+            std::stringstream ss(raw);
+            std::string item;
+            while (std::getline(ss, item, ':'))
+            {
+                auto l = item.find_first_not_of(" \t");
+                auto r = item.find_last_not_of(" \t");
+                if (l == std::string::npos)
+                    continue;
+                result.push_back(item.substr(l, r - l + 1));
+            }
+            return result;
+        }
+
+        std::string joinChain(const std::vector<std::string>& chain)
+        {
+            std::string out;
+            for (size_t i = 0; i < chain.size(); ++i)
+            {
+                if (i > 0)
+                    out += ':';
+                out += chain[i];
+            }
+            return out;
+        }
+
+        // Write the current registry state to a .conf file:
+        //   - `effects = a:b:c` with the current chain order
+        //   - every slider's current value (across all four cards, regardless
+        //     of whether the card is active right now — this preserves the
+        //     values so re-adding a removed card restores them)
         void writeProfileFile(const fs::path& path, vkBasalt::EffectRegistry* reg)
         {
             std::error_code ec;
@@ -187,17 +247,40 @@ namespace gff
                 return;
             }
             out << "# GameFiltersFlatpak profile\n";
-            out << "effects = gff_pipeline\n";
-            for (const auto& key : kProfileKeys)
+            out << "effects = " << joinChain(reg->getSelectedEffects()) << "\n";
+            for (const auto& card : cardList())
             {
-                auto* param = reg->getParameter(kEffectName, key);
-                if (!param)
-                    continue;
-                auto* fp = dynamic_cast<vkBasalt::FloatParam*>(param);
-                if (!fp)
-                    continue;
-                out << key << " = " << vkBasalt::floatToString(fp->value) << "\n";
+                for (const auto& s : card.sliders)
+                {
+                    auto* param = reg->getParameter(card.effectName, s.key);
+                    if (!param)
+                        continue;
+                    auto* fp = dynamic_cast<vkBasalt::FloatParam*>(param);
+                    if (!fp)
+                        continue;
+                    out << s.key << " = " << vkBasalt::floatToString(fp->value) << "\n";
+                }
             }
+        }
+
+        // Seed a brand-new profile file: empty chain (no filters active,
+        // matching the Freestyle "start with nothing" UX) and all sliders
+        // at zero. Used by initializeForGame when a profile slot is missing.
+        void writeInitialProfileFile(const fs::path& path)
+        {
+            std::error_code ec;
+            fs::create_directories(path.parent_path(), ec);
+            std::ofstream out(path, std::ios::trunc);
+            if (!out.good())
+            {
+                vkBasalt::Logger::warn("profile: cannot write " + path.string());
+                return;
+            }
+            out << "# GameFiltersFlatpak profile\n";
+            out << "effects = \n";
+            for (const auto& card : cardList())
+                for (const auto& s : card.sliders)
+                    out << s.key << " = 0.0\n";
         }
 
         void writeActiveMarker(const std::string& gameName, int n)
@@ -220,42 +303,85 @@ namespace gff
 
         // Apply values from `vals` into both the EffectRegistry (so the UI
         // reflects them) and the Config override map (so the next effect
-        // rebuild reads the right numbers). Keys not in `vals` reset to 0
-        // so switching profiles doesn't leak values from the old one.
-        void applyValuesToRegistryAndConfig(const std::map<std::string, std::string>& vals,
+        // rebuild reads the right numbers). Also applies the chain order
+        // from the `effects` key, with legacy-migration for profiles that
+        // still say `effects = gff_pipeline`.
+        //
+        // Returns true if legacy migration was performed — the caller
+        // should follow up with writeProfileFile(path, reg) to persist
+        // the migrated form so it doesn't re-migrate on every launch.
+        bool applyValuesToRegistryAndConfig(const std::map<std::string, std::string>& vals,
                                             vkBasalt::EffectRegistry*                  reg)
         {
             auto* cfg = reg->getConfig();
             if (cfg)
                 cfg->clearOverrides();
-            for (const auto& key : kProfileKeys)
+
+            // Chain (active effects). No `effects` key = empty chain =
+            // pass-through (Freestyle "no filters active" default).
+            bool migrated = false;
+            std::vector<std::string> chain;
+            if (auto it = vals.find("effects"); it != vals.end())
+                chain = parseChain(it->second, migrated);
+            reg->setSelectedEffects(chain);
+            // Ensure each effect has an EffectConfig entry in the registry
+            // before we try to set its parameters below — setSelectedEffects
+            // only updates the ordered name list, and upstream's chain
+            // builder gates on isEffectEnabled (which returns false for
+            // unregistered effects, producing a silent pass-through chain).
+            // Mirrors the pattern in initializeSelectedEffectsFromConfig.
+            for (const auto& name : chain)
+                reg->ensureEffect(name);
+            if (migrated)
+                vkBasalt::Logger::info("profile: migrating legacy gff_pipeline -> split chain");
+
+            // Per-card slider values. Written for every card regardless of
+            // whether the card is currently active, so re-adding a removed
+            // card restores its last-known values.
+            for (const auto& card : cardList())
             {
-                float value = 0.0f;
-                auto it = vals.find(key);
-                if (it != vals.end())
+                for (const auto& s : card.sliders)
                 {
-                    std::stringstream ss(it->second);
-                    ss.imbue(std::locale::classic());
-                    ss >> value;
+                    float value = 0.0f;
+                    auto it = vals.find(s.key);
+                    if (it != vals.end())
+                    {
+                        std::stringstream ss(it->second);
+                        ss.imbue(std::locale::classic());
+                        ss >> value;
+                    }
+                    // Reject malformed .conf values — NaN/Inf flow directly
+                    // into shader spec constants and yield undefined GPU
+                    // math. Clamp in-range too so a profile pack with out-
+                    // of-slider values can't drive the shader off its
+                    // calibrated curve.
+                    if (!std::isfinite(value))
+                        value = 0.0f;
+                    if (auto* param = reg->getParameter(card.effectName, s.key);
+                        param && param->getType() == vkBasalt::ParamType::Float)
+                    {
+                        auto* fp = static_cast<vkBasalt::FloatParam*>(param);
+                        value = std::clamp(value, fp->minValue, fp->maxValue);
+                    }
+                    reg->setParameterValue(card.effectName, s.key, value);
+                    if (cfg)
+                        cfg->setOverride(s.key, vkBasalt::floatToString(value));
                 }
-                // Reject malformed .conf values — NaN/Inf flow directly
-                // into shader spec constants and yield undefined GPU math.
-                // Clamp in-range too so a profile pack with out-of-slider
-                // values can't drive the shader off its calibrated curve.
-                if (!std::isfinite(value))
-                    value = 0.0f;
-                if (auto* param = reg->getParameter(kEffectName, key);
-                    param && param->getType() == vkBasalt::ParamType::Float)
-                {
-                    auto* fp = static_cast<vkBasalt::FloatParam*>(param);
-                    value = std::clamp(value, fp->minValue, fp->maxValue);
-                }
-                reg->setParameterValue(kEffectName, key, value);
-                if (cfg)
-                    cfg->setOverride(key, vkBasalt::floatToString(value));
             }
+            return migrated;
+        }
+
+        // Load a profile from disk, apply, and persist the migrated form
+        // back to disk if legacy migration was triggered.
+        void loadProfileFromDisk(const fs::path& path, vkBasalt::EffectRegistry* reg)
+        {
+            auto vals = parseConf(path);
+            if (applyValuesToRegistryAndConfig(vals, reg))
+                writeProfileFile(path, reg);
         }
     } // namespace
+
+    const std::vector<CardDef>& cards() { return cardList(); }
 
     const ProfileState& state() { return g_state; }
 
@@ -380,12 +506,13 @@ namespace gff
         fs::create_directories(gameDir(g_state.gameName), ec);
 
         // Create any missing profile files so the UI always has three valid
-        // slots to show. Files that already exist are left alone.
+        // slots to show. New files start empty (no filters active, all
+        // sliders zero) — matches Freestyle's "start from scratch" UX.
         for (int n = 1; n <= 3; ++n)
         {
             auto path = profilePath(g_state.gameName, n);
             if (!fs::exists(path))
-                writeProfileFile(path, reg);
+                writeInitialProfileFile(path);
         }
 
         g_state.activeProfile = readActiveMarker(g_state.gameName);
@@ -398,8 +525,7 @@ namespace gff
         const bool feOk = frontendAvailable();
         if (feOk)
         {
-            auto vals = parseConf(profilePath(g_state.gameName, g_state.activeProfile));
-            applyValuesToRegistryAndConfig(vals, reg);
+            loadProfileFromDisk(profilePath(g_state.gameName, g_state.activeProfile), reg);
         }
         else
         {
@@ -428,8 +554,7 @@ namespace gff
         g_state.activeProfile = n;
         writeActiveMarker(g_state.gameName, n);
 
-        auto vals = parseConf(profilePath(g_state.gameName, n));
-        applyValuesToRegistryAndConfig(vals, reg);
+        loadProfileFromDisk(profilePath(g_state.gameName, n), reg);
         // Without markDirty the spec constants on the existing pipeline
         // never get rebaked, so the new values would only show in the UI.
         if (overlay)
@@ -448,8 +573,7 @@ namespace gff
     {
         if (!reg || g_state.gameName.empty())
             return;
-        auto vals = parseConf(profilePath(g_state.gameName, g_state.activeProfile));
-        applyValuesToRegistryAndConfig(vals, reg);
+        loadProfileFromDisk(profilePath(g_state.gameName, g_state.activeProfile), reg);
         if (overlay)
             overlay->markDirty();
     }
@@ -461,5 +585,72 @@ namespace gff
         applyValuesToRegistryAndConfig({}, reg);
         if (overlay)
             overlay->markDirty();
+    }
+
+    void addCard(const std::string&       effectName,
+                 vkBasalt::EffectRegistry* reg,
+                 vkBasalt::ImGuiOverlay*   overlay)
+    {
+        if (!reg)
+            return;
+        auto chain = reg->getSelectedEffects();
+        if (std::find(chain.begin(), chain.end(), effectName) != chain.end())
+            return;
+        chain.push_back(effectName);
+        reg->setSelectedEffects(chain);
+        // Materialize the EffectConfig so isEffectEnabled reports true for
+        // the new card when basalt.cpp's debounced reload runs; otherwise
+        // the chain rebuild filters it out and the overlay looks active
+        // but rendering stays pass-through.
+        reg->ensureEffect(effectName);
+        saveActiveProfile(reg);
+        if (overlay)
+            overlay->markDirty();
+        vkBasalt::Logger::info("cards: activated " + effectName
+                               + " (chain=" + joinChain(chain) + ")");
+    }
+
+    void removeCard(const std::string&       effectName,
+                    vkBasalt::EffectRegistry* reg,
+                    vkBasalt::ImGuiOverlay*   overlay)
+    {
+        if (!reg)
+            return;
+        auto chain = reg->getSelectedEffects();
+        auto it = std::find(chain.begin(), chain.end(), effectName);
+        if (it == chain.end())
+            return;
+        chain.erase(it);
+        reg->setSelectedEffects(chain);
+        saveActiveProfile(reg);
+        if (overlay)
+            overlay->markDirty();
+        vkBasalt::Logger::info("cards: removed " + effectName
+                               + " (chain=" + joinChain(chain) + ")");
+    }
+
+    void moveCard(const std::string&       effectName,
+                  int                       delta,
+                  vkBasalt::EffectRegistry* reg,
+                  vkBasalt::ImGuiOverlay*   overlay)
+    {
+        if (!reg || delta == 0)
+            return;
+        auto chain = reg->getSelectedEffects();
+        auto it = std::find(chain.begin(), chain.end(), effectName);
+        if (it == chain.end())
+            return;
+        int idx    = static_cast<int>(it - chain.begin());
+        int target = idx + delta;
+        if (target < 0 || target >= static_cast<int>(chain.size()))
+            return;
+        std::swap(chain[idx], chain[target]);
+        reg->setSelectedEffects(chain);
+        saveActiveProfile(reg);
+        if (overlay)
+            overlay->markDirty();
+        vkBasalt::Logger::info(std::string("cards: moved ") + effectName
+                               + (delta < 0 ? " up" : " down")
+                               + " (chain=" + joinChain(chain) + ")");
     }
 } // namespace gff

@@ -84,7 +84,7 @@ pub fn write_active(profile: &Profile) -> std::io::Result<()> {
 fn format_conf(p: &Profile) -> String {
     format!(
         "# Written by game-filters-flatpak frontend\n\
-         effects = gff_pipeline\n\
+         effects = gff_local:gff_tonal:gff_color:gff_stylistic\n\
          gff.brightness = {bright}\n\
          gff.contrast = {contrast}\n\
          gff.highlights = {hi}\n\

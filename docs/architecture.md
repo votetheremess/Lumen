@@ -4,7 +4,7 @@ Two separately-packaged Flatpak artifacts that communicate over Unix sockets. Th
 
 ## Vulkan Layer — `com.gamefiltersflatpak.VulkanLayer`
 
-C++, Meson. Forked from [vkBasalt_overlay](https://github.com/Boux/vkBasalt_overlay), which itself descends from vkBasalt. We inherit the Vulkan hooking, ImGui integration, effect registry, shader pipeline, and ReShade FX compiler. We own the visual design, theme, layered sidebar UI, branding, implicit-layer loader model, per-game profile system, IPC client, abstract-socket support, font loader, and the `gff_pipeline` shader/effect. Upstream Zlib notice preserved at `layer/LICENSE-UPSTREAM`.
+C++, Meson. Forked from [vkBasalt_overlay](https://github.com/Boux/vkBasalt_overlay), which itself descends from vkBasalt. We inherit the Vulkan hooking, ImGui integration, effect registry, shader pipeline, and ReShade FX compiler. We own the visual design, theme, layered sidebar UI, branding, implicit-layer loader model, per-game profile system, IPC client, abstract-socket support, font loader, and the four chained GFF effects (`gff_local`, `gff_tonal`, `gff_color`, `gff_stylistic`). Upstream Zlib notice preserved at `layer/LICENSE-UPSTREAM`.
 
 Installed as an **implicit** Vulkan layer — the Vulkan loader auto-loads it into every Vulkan application on the system, the same mechanism `VK_LAYER_MESA_device_select` uses. No per-game `ENABLE_VK*=1` launch options required. This is the single most important UX differentiator vs existing Linux post-processing tools (vkBasalt, vkPost, upstream vkBasalt_overlay all ship as explicit layers).
 
@@ -21,11 +21,24 @@ Every `VkResult` that `vkBasalt_QueuePresentKHR` returns to a Wine/Proton caller
 
 ### Overlay and input blocking
 
-In-game UI is a left-edge full-height sidebar, position-locked (`ImGuiWindowFlags_NoMove`, pinned to `viewport->WorkPos`). Four grouped cards matching Nvidia's Freestyle layout (Brightness/Contrast, Color, Details, Effects) plus a three-slot profile selector. Sliders are live — changes flow through the registry into spec-constant rebakes on the next frame. When the overlay is open, XInput2 `XIGrabDevice` grabs every master and attached-slave pointer/keyboard so the game doesn't see mouse motion or keystrokes. `XIGrabDevice` covers both core X events and `XI_RawMotion`, which Wine/DXVK titles read for mouse input and which the legacy `XGrabPointer` doesn't catch.
+In-game UI is a left-edge full-height sidebar, position-locked (`ImGuiWindowFlags_NoMove`, pinned to `viewport->WorkPos`). A three-slot profile selector at the top, then a Freestyle-style filter stack: users start with no filters active, add cards with `Add`, reorder with `Up`/`Down`, and remove with `Remove`. Four canonical cards map to the four GFF effects (Brightness/Contrast → `gff_tonal`, Color → `gff_color`, Details → `gff_local`, Effects → `gff_stylistic`). Sliders are live — changes flow through the registry into spec-constant rebakes on the next frame. When the overlay is open, XInput2 `XIGrabDevice` grabs every master and attached-slave pointer/keyboard so the game doesn't see mouse motion or keystrokes. `XIGrabDevice` covers both core X events and `XI_RawMotion`, which Wine/DXVK titles read for mouse input and which the legacy `XGrabPointer` doesn't catch.
 
 ### Filter pipeline
 
-Single combined effect, single fragment shader (`layer/src/shader/gff.frag.glsl`), 15 specialization-constant parameters. Sliders are in Nvidia's public scale — bipolar ±100 or unipolar 0–100 — and the shader normalizes internally. Pass order in `main()` is fixed: local → tonal → color → stylistic. The shader works on gamma-encoded sRGB (not linear light); `effect_gff.cpp` pins the input/output views to the UNORM alias of the swapchain format via `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT`, so the hardware sampler neither auto-linearizes on read nor re-encodes on write. The Rec.601 luma math matches Freestyle's reference against gamma-encoded signal.
+Four chained fragment-shader passes, each its own `SimpleEffect` subclass with its own SPIR-V pipeline and specialization constants. Upstream vkBasalt's chain infrastructure (`LogicalSwapchain::effects` vector, iterated in `command_buffer.cpp`) runs each effect as a separate render pass, feeding pass N's output to pass N+1's input. Chain order comes from the registry's `selectedEffects` list, persisted in each profile's `effects = a:b:c` line. Because each pass reads the previous pass's output (not the original swapchain image), users can freely reorder cards without the "spatial filter sees already-graded neighbors" problem that a single-pass design would have.
+
+| Effect | Shader | Sliders |
+|---|---|---|
+| `gff_local` | `gff_local.frag.glsl` | Sharpen, Clarity, HDR Toning, Bloom |
+| `gff_tonal` | `gff_tonal.frag.glsl` | Exposure, Contrast, Highlights, Shadows, Gamma |
+| `gff_color` | `gff_color.frag.glsl` | Tint Color, Tint Intensity, Temperature, Vibrance |
+| `gff_stylistic` | `gff_stylistic.frag.glsl` | Vignette, Black & White |
+
+Sliders follow Nvidia's public scale (bipolar ±100, unipolar 0–100, hue 0–360) so Windows preset values paste in directly. Each shader normalizes internally. Every GFF effect pins its image views to the UNORM alias of the swapchain format via `VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT`, so the hardware sampler neither auto-linearizes on read nor re-encodes on write. Rec.601 luma matches Freestyle's reference against gamma-encoded signal.
+
+Intermediate render targets between passes are 8-bit UNORM (matching Freestyle). If gradient content ever reveals cumulative quantization banding, the `SimpleEffect::init(..., viewFormat)` override already supports bumping intermediates to 16-bit at the cost of extra VRAM.
+
+Tonal math (Exposure / Contrast / Shadows / Highlights / Gamma) stays bundled in one shader — the stages depend on each other's intermediate values and splitting them across passes reintroduces the clamp-then-shape problem the combined form avoids. Card-level split only.
 
 Sign conventions (empirical, from YouTube Freestyle reference):
 
@@ -33,7 +46,7 @@ Sign conventions (empirical, from YouTube Freestyle reference):
 - `+highlights` → RECOVERY / darken brights (Lightroom convention)
 - `+gamma` → brighter midtones (Nvidia and Lightroom agree)
 
-See `layer/src/shader/gff.frag.glsl` for the full parameter list and shader math.
+See the four `gff_*.frag.glsl` shaders for full parameter lists and math.
 
 ## Frontend — `com.gamefiltersflatpak.App`
 

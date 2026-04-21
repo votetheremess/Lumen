@@ -2,6 +2,7 @@
 #define GFF_PROFILE_MANAGER_HPP_INCLUDED
 
 #include <string>
+#include <vector>
 
 namespace vkBasalt
 {
@@ -53,6 +54,53 @@ namespace gff
     // Apply all-zero values (pass-through). Called by the IPC layer when
     // the frontend connection drops or fails to establish.
     void applyNeutral(vkBasalt::EffectRegistry* reg, vkBasalt::ImGuiOverlay* overlay);
+
+    // --- Filter stack (add / remove / reorder) --------------------------
+    //
+    // The overlay exposes four cards — Brightness/Contrast, Color, Details,
+    // Effects — each backed by one effect in the chain (gff_tonal, gff_color,
+    // gff_local, gff_stylistic). Users activate cards with "+", remove with
+    // "−", and reorder with "↑ ↓". State lives in the registry's selected-
+    // effects list and is persisted to the active profile's `effects = ...`
+    // line.
+
+    struct CardSlider
+    {
+        const char* key;    // Parameter key, e.g. "gff.exposure"
+        const char* label;  // Human-readable slider label
+        const char* fmt;    // ImGui format string (e.g. "%.0f" or "%.0f\xc2\xb0")
+    };
+
+    struct CardDef
+    {
+        const char*             effectName;  // Built-in effect name, e.g. "gff_tonal"
+        const char*             title;       // Section header, e.g. "Brightness / Contrast"
+        std::vector<CardSlider> sliders;     // Sliders owned by this card, in display order
+    };
+
+    // Canonical card list. Order here is the migration/default order used
+    // when legacy profiles are upgraded and inactive cards are listed in
+    // the "Add filter" section.
+    const std::vector<CardDef>& cards();
+
+    // Append `effectName` to the end of the active chain if not already
+    // present. Persists to disk and triggers a debounced swapchain reload.
+    void addCard(const std::string&       effectName,
+                 vkBasalt::EffectRegistry* reg,
+                 vkBasalt::ImGuiOverlay*   overlay);
+
+    // Remove `effectName` from the active chain. Slider values for the
+    // card are preserved on disk so re-adding later restores them.
+    void removeCard(const std::string&       effectName,
+                    vkBasalt::EffectRegistry* reg,
+                    vkBasalt::ImGuiOverlay*   overlay);
+
+    // Swap `effectName` with its neighbor in the chain (delta = -1 for up,
+    // +1 for down). No-op if the move would fall off either end.
+    void moveCard(const std::string&       effectName,
+                  int                       delta,
+                  vkBasalt::EffectRegistry* reg,
+                  vkBasalt::ImGuiOverlay*   overlay);
 
     // Best-effort probe: returns true if the frontend's IPC socket is
     // reachable right now (filesystem path or abstract namespace).

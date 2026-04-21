@@ -6,7 +6,10 @@
 #include "effect_smaa.hpp"
 #include "effect_deband.hpp"
 #include "effect_lut.hpp"
-#include "effect_gff.hpp"
+#include "effect_gff_local.hpp"
+#include "effect_gff_tonal.hpp"
+#include "effect_gff_color.hpp"
+#include "effect_gff_stylistic.hpp"
 
 namespace vkBasalt
 {
@@ -126,45 +129,74 @@ namespace vkBasalt
             }
         };
 
-        // GFF Pipeline — combined filter pass that replicates Nvidia Freestyle's
-        // public parameter semantics (ranges in -100..+100 or 0..100 so users
-        // can paste values straight from their Windows presets). Shader is at
-        // layer/src/shader/gff.frag.glsl; param normalization happens inside
-        // the shader's main() body.
-        //
-        // Per-slider math is ported from the leaked Nvidia Freestyle .yfx files
-        // shipped accidentally in the 470.05 driver beta — `Adjustment.yfx`
-        // (Brightness/Contrast/Color block) and `Details.yfx` (Sharpen/Clarity/
-        // HDR Toning/Bloom block). Those shaders operate on gamma-encoded sRGB
-        // values directly with Rec.601 luma weights; `effect_gff.cpp` forces
-        // UNORM image views so the hardware sampler never auto-linearizes.
-        effects["gff_pipeline"] = {
-            "gff_pipeline",
-            false,  // uses UNORM — required: math is calibrated in sRGB-encoded space
+        // GFF chain — four sibling effects that together replicate Nvidia
+        // Freestyle's filter stack. Users add, remove, and reorder these
+        // as independent passes. Each one operates on gamma-encoded sRGB
+        // (UNORM image views forced in the effect constructor) to match
+        // the leaked Nvidia .yfx math (Adjustment.yfx, Details.yfx — 470.05
+        // driver beta). Slider ranges follow Nvidia's public scale so
+        // Windows preset values paste in directly.
+
+        // Local / spatial: Sharpen, Clarity, HDR Toning, Bloom.
+        effects["gff_local"] = {
+            "gff_local",
+            false,  // uses UNORM — math calibrated in sRGB-encoded space
             {
-                // Brightness / Contrast (Nvidia's first filter card)
-                {"gff.exposure",      "Exposure",       ParamType::Float, 0.0f, -100.0f, 100.0f},
-                {"gff.contrast",      "Contrast",       ParamType::Float, 0.0f, -100.0f, 100.0f},
-                {"gff.highlights",    "Highlights",     ParamType::Float, 0.0f, -100.0f, 100.0f},
-                {"gff.shadows",       "Shadows",        ParamType::Float, 0.0f, -100.0f, 100.0f},
-                {"gff.gamma",         "Gamma",          ParamType::Float, 0.0f, -100.0f, 100.0f},
-                // Color (Nvidia's second filter card)
+                {"gff.sharpen",   "Sharpen",    ParamType::Float, 0.0f, 0.0f, 100.0f},
+                {"gff.clarity",   "Clarity",    ParamType::Float, 0.0f, 0.0f, 100.0f},
+                {"gff.hdrToning", "HDR Toning", ParamType::Float, 0.0f, 0.0f, 100.0f},
+                {"gff.bloom",     "Bloom",      ParamType::Float, 0.0f, 0.0f, 100.0f},
+            },
+            [](LogicalDevice* dev, VkFormat fmt, VkExtent2D ext,
+               std::vector<VkImage> in, std::vector<VkImage> out, Config* cfg) {
+                return std::make_shared<GffLocalEffect>(dev, fmt, ext, in, out, cfg);
+            }
+        };
+
+        // Tonal: Exposure, Contrast, Highlights, Shadows, Gamma.
+        effects["gff_tonal"] = {
+            "gff_tonal",
+            false,
+            {
+                {"gff.exposure",   "Exposure",   ParamType::Float, 0.0f, -100.0f, 100.0f},
+                {"gff.contrast",   "Contrast",   ParamType::Float, 0.0f, -100.0f, 100.0f},
+                {"gff.highlights", "Highlights", ParamType::Float, 0.0f, -100.0f, 100.0f},
+                {"gff.shadows",    "Shadows",    ParamType::Float, 0.0f, -100.0f, 100.0f},
+                {"gff.gamma",      "Gamma",      ParamType::Float, 0.0f, -100.0f, 100.0f},
+            },
+            [](LogicalDevice* dev, VkFormat fmt, VkExtent2D ext,
+               std::vector<VkImage> in, std::vector<VkImage> out, Config* cfg) {
+                return std::make_shared<GffTonalEffect>(dev, fmt, ext, in, out, cfg);
+            }
+        };
+
+        // Color: Tint Color, Tint Intensity, Temperature, Vibrance.
+        effects["gff_color"] = {
+            "gff_color",
+            false,
+            {
                 {"gff.tintColor",     "Tint Color",     ParamType::Float, 0.0f,    0.0f, 360.0f},
                 {"gff.tintIntensity", "Tint Intensity", ParamType::Float, 0.0f,    0.0f, 100.0f},
                 {"gff.temperature",   "Temperature",    ParamType::Float, 0.0f, -100.0f, 100.0f},
                 {"gff.vibrance",      "Vibrance",       ParamType::Float, 0.0f, -100.0f, 100.0f},
-                // Details (Nvidia's third filter card)
-                {"gff.sharpen",       "Sharpen",        ParamType::Float, 0.0f,    0.0f, 100.0f},
-                {"gff.clarity",       "Clarity",        ParamType::Float, 0.0f,    0.0f, 100.0f},
-                {"gff.hdrToning",     "HDR Toning",     ParamType::Float, 0.0f,    0.0f, 100.0f},
-                {"gff.bloom",         "Bloom",          ParamType::Float, 0.0f,    0.0f, 100.0f},
-                // Extra — standalone filters in Nvidia's UI, grouped here
-                {"gff.vignette",      "Vignette",       ParamType::Float, 0.0f,    0.0f, 100.0f},
-                {"gff.bwIntensity",   "Black & White",  ParamType::Float, 0.0f,    0.0f, 100.0f},
             },
             [](LogicalDevice* dev, VkFormat fmt, VkExtent2D ext,
                std::vector<VkImage> in, std::vector<VkImage> out, Config* cfg) {
-                return std::make_shared<GffEffect>(dev, fmt, ext, in, out, cfg);
+                return std::make_shared<GffColorEffect>(dev, fmt, ext, in, out, cfg);
+            }
+        };
+
+        // Stylistic: Vignette, Black & White.
+        effects["gff_stylistic"] = {
+            "gff_stylistic",
+            false,
+            {
+                {"gff.vignette",    "Vignette",      ParamType::Float, 0.0f, 0.0f, 100.0f},
+                {"gff.bwIntensity", "Black & White", ParamType::Float, 0.0f, 0.0f, 100.0f},
+            },
+            [](LogicalDevice* dev, VkFormat fmt, VkExtent2D ext,
+               std::vector<VkImage> in, std::vector<VkImage> out, Config* cfg) {
+                return std::make_shared<GffStylisticEffect>(dev, fmt, ext, in, out, cfg);
             }
         };
     }
